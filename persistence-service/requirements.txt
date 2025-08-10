@@ -1,0 +1,9 @@
+# -----------------------------------------------------------------------------
+# ARQUIVO: persistence-service/requirements.txt (VERSÃO CORRIGIDA)
+# -----------------------------------------------------------------------------
+Django
+djangorestframework
+django-cors-headers
+pika
+psycopg2-binary # Driver correto para PostgreSQL
+djangorestframework-simplejwt

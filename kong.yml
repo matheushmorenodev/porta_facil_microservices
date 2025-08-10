@@ -1,0 +1,63 @@
+_format_version: "2.1"
+
+services:
+- name: auth-service
+  url: http://auth-service:8001
+  routes:
+  - name: auth-routes
+    paths:
+    - /api/auth
+    strip_path: true
+
+- name: persistence-service
+  url: http://persistence-service:8002
+  routes:
+  - name: persistence-routes
+    paths:
+    - /api/resources
+    strip_path: true
+    plugins:
+      # MUDANÇA CRÍTICA: O TRANSFORMER DEVE VIR ANTES DO JWT
+      - name: request-transformer
+        config:
+          replace:
+            headers:
+              - "Authorization: Bearer $(cookie_access_token)"
+              # LINHA DE DEPURAÇÃO: Adiciona um header para vermos o valor do cookie
+              - "X-Debug-Cookie-Value: $(cookie_access_token)"
+      - name: jwt
+        config:
+          cookie_names: ["access_token"]
+          key_claim_name: "iss"
+
+- name: command-service
+  url: http://command-service:8004
+  routes:
+  - name: command-routes
+    paths:
+    - /api/command
+    strip_path: true
+    plugins:
+      # MUDANÇA CRÍTICA: O TRANSFORMER DEVE VIR ANTES DO JWT
+      - name: request-transformer
+        config:
+          replace:
+            headers:
+              - "Authorization: Bearer $(cookie_access_token)"
+              # LINHA DE DEPURAÇÃO: Adiciona um header para vermos o valor do cookie
+              - "X-Debug-Cookie-Value: $(cookie_access_token)"
+      - name: jwt
+        config:
+          cookie_names: ["access_token"]
+          key_claim_name: "iss"
+
+# A credencial JWT agora está aninhada diretamente sob o consumidor.
+# Esta é a forma mais explícita de dizer ao Kong: "Este consumidor usa esta chave secreta".
+consumers:
+- username: porta-facil-api
+  jwt_secrets:
+  # O 'key' DEVE corresponder ao valor do 'iss' no token.
+  - key: porta-facil-api
+    algorithm: HS256
+    # A 'secret' DEVE ser a mesma da SECRET_KEY do auth-service.
+    secret: "my-super-secret-key-that-must-match"

@@ -1,0 +1,11 @@
+# -----------------------------------------------------------------------------
+# ARQUIVO: auth-service/requirements.txt (VERSÃO CORRIGIDA)
+# -----------------------------------------------------------------------------
+Django
+djangorestframework
+djangorestframework-simplejwt
+django-cors-headers
+pika
+psycopg2-binary # Driver correto para PostgreSQL
+bcrypt
+requests

@@ -1,0 +1,174 @@
+# -----------------------------------------------------------------------------
+# ARQUIVO: docker-compose.yml (VERSÃO FINAL E CORRIGIDA)
+# -----------------------------------------------------------------------------
+services:
+  db_postgres:
+    image: postgres:16 # MUDANÇA CRÍTICA: Atualizado para uma versão compatível
+    container_name: db_postgres
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=admin
+      - POSTGRES_DB=porta_facil
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d porta_facil"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+  mosquitto:
+    image: eclipse-mosquitto
+    container_name: mosquitto
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+
+  auth-service:
+    build: ./auth-service
+    container_name: auth-service
+    command: >
+      sh -c "python manage.py migrate &&
+             echo '✅ AUTH-SERVICE está pronto e ouvindo na porta 8001...' &&
+             python manage.py runserver 0.0.0.0:8001"    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/admin/login/"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s    
+    volumes:
+      - ./auth-service:/app
+    ports:
+      - "8011:8001"
+    environment:
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - DATABASE_URL=postgresql+psycopg2://admin:admin@db_postgres:5432/porta_facil
+    depends_on:
+      db_postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_started
+
+  persistence-service:
+    build: ./persistence-service
+    container_name: persistence-service
+    command: >
+      sh -c "python manage.py migrate &&
+             echo '✅ PERSISTENCE-SERVICE está pronto e ouvindo na porta 8002...' &&
+             python manage.py runserver 0.0.0.0:8002"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/admin/login/"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    volumes:
+      - ./persistence-service:/app
+    ports:
+      - "8002:8002"
+    environment:
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - DATABASE_URL=postgresql+psycopg2://admin:admin@db_postgres:5432/porta_facil
+    depends_on:
+      db_postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_started
+
+  persistence-consumer:
+    build: ./persistence-service
+    container_name: persistence-consumer
+    command: python event_consumer.py
+    restart: on-failure
+    volumes:
+      - ./persistence-service:/app
+    environment:
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - DATABASE_URL=postgresql+psycopg2://admin:admin@db_postgres:5432/porta_facil
+    depends_on:
+      - persistence-service
+
+  log-service:
+    build: ./log-service
+    container_name: log-service
+    command: >
+      sh -c "echo '✅ LOG-SERVICE está pronto e ouvindo na porta 8003...' &&
+             uvicorn main:app --host 0.0.0.0 --port 8003"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    volumes:
+      - ./log-service:/app
+    ports:
+      - "8003:8003"
+    environment:
+      - DATABASE_URL=postgresql+psycopg2://admin:admin@db_postgres:5432/porta_facil
+    depends_on:
+      db_postgres:
+        condition: service_healthy
+
+  command-service:
+    build: ./command-service
+    container_name: command-service
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8004/"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    command: >
+      sh -c "echo '✅ COMMAND-SERVICE está pronto e ouvindo na porta 8004...' &&
+             uvicorn main:app --host 0.0.0.0 --port 8004"
+    volumes:
+      - ./command-service:/app
+    ports:
+      - "8004:8004"
+    environment:
+      - PERSISTENCE_SERVICE_URL=http://persistence-service:8002
+      - LOG_SERVICE_URL=http://log-service:8003
+      - MQTT_BROKER_HOST=mosquitto
+    depends_on:
+      - persistence-service
+      - log-service
+      - mosquitto
+
+  kong:
+    image: kong:latest
+    container_name: kong-gateway
+    environment:
+      - KONG_DATABASE=off
+      - KONG_DECLARATIVE_CONFIG=/usr/local/kong/declarative/kong.yml
+      - KONG_PROXY_ACCESS_LOG=/dev/stdout
+      - KONG_ADMIN_ACCESS_LOG=/dev/stdout
+      - KONG_PROXY_ERROR_LOG=/dev/stderr
+      - KONG_ADMIN_ERROR_LOG=/dev/stderr
+      - KONG_ADMIN_LISTEN=0.0.0.0:8001
+      - KONG_PLUGINS=bundled,jwt
+    volumes:
+      - ./kong.yml:/usr/local/kong/declarative/kong.yml:ro
+    ports:
+      - "8000:8000"
+      - "8001:8001"
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      persistence-service:
+        condition: service_healthy
+      command-service:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

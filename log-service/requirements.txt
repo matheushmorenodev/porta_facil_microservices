@@ -1,0 +1,12 @@
+# -----------------------------------------------------------------------------
+# ARQUIVO: log-service/requirements.txt (VERSÃO FINAL)
+# -----------------------------------------------------------------------------
+fastapi
+uvicorn[standard]
+sqlalchemy
+pydantic-settings
+python-dotenv
+PyMySQL
+cryptography # MUDANÇA: Adicionada a dependência necessária para a autenticação do MySQL.
+psycopg2-binary
+# --- FIM DO ARQUIVO requirements.txt ---
