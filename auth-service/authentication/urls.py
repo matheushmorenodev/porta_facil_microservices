@@ -21,12 +21,12 @@ urlpatterns = [
     path('token/verify/', TokenVerifyView.as_view(), name='token_verify'),
 
     # Registro e Logout
-    path('register/', register_user, name='register_user'),
-    path('logout/', logout_view, name='logout'),
+    #path('register/', register_user, name='register_user'),
+    #path('logout/', logout_view, name='logout'),
 
     # Verificação de status
-    path('authenticated/', check_authenticated_view, name='check_authenticated'),
+    #path('authenticated/', check_authenticated_view, name='check_authenticated'),
     
     # NOVO: Rota para o login simulado
-    path('mock-login/', mock_login, name='mock_login'),
+    #path('mock-login/', mock_login, name='mock_login'),
 ]
