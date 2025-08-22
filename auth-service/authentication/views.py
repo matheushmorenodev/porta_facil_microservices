@@ -14,8 +14,20 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from .serializers import UserRegistrationSerializer, UserSerializer
 from .models import SUAPTokenBackup
-from .suap_utils import suap_login, get_user_info
+from .suap_utils import SuapUnauthorized, suap_login, get_user_info
 from .event_publisher import publish_event
+
+# importa as exceções que definimos no suap_login
+from .suap_utils import (
+    suap_login,
+    SuapError,
+    SuapInvalidCredentials,
+    SuapForbidden,
+    SuapNotFound,
+    SuapServerError,
+)
+
+
 
 def set_auth_cookies(response, access_token, refresh_token):
     """Função auxiliar para configurar os cookies de autenticação na resposta."""
@@ -88,67 +100,43 @@ def register_user(request):
         return Response({'detail': 'Usuário registrado com sucesso.'}, status=status.HTTP_201_CREATED)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+
 class SUAPLoginView(APIView):
-    """View para autenticação via API do SUAP, com fallback e enriquecimento de token."""
+    """View para autenticação via API do SUAP, com tratamento de erros."""
     permission_classes = [AllowAny]
+
     def post(self, request):
         username = request.data.get("username")
         password = request.data.get("password")
-        if not username or not password:
-            return Response({"detail": "Usuário e senha são obrigatórios."}, status=status.HTTP_400_BAD_REQUEST)
 
-        suap_access_token = suap_login(username, password)
-        user = None
+        try:
+            data = suap_login(username, password)
+            data = data | get_user_info(data.get("access"))
+            return Response(data, status=status.HTTP_200_OK)
 
-        if not suap_access_token:
-            try:
-                backup = SUAPTokenBackup.objects.get(user__username=username)
-                if backup.is_valid() and check_password(password, backup.password_hash):
-                    suap_access_token = backup.suap_token
-                    user = backup.user
-                else:
-                    return Response({"detail": "Credenciais inválidas ou token de backup expirado."}, status=401)
-            except SUAPTokenBackup.DoesNotExist:
-                return Response({"detail": "Falha na autenticação com o SUAP e sem backup disponível."}, status=401)
+        except SuapInvalidCredentials as e:
+            return Response({"detail": str(e)}, status=status.HTTP_401_UNAUTHORIZED)
         
-        user_info = get_user_info(suap_access_token)
-        if not user_info:
-            return Response({"detail": "Não foi possível obter os dados do SUAP."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except SuapUnauthorized as e:
+            return Response({"detail": str(e)}, status=status.HTTP_401_UNAUTHORIZED)
 
-        user, created = User.objects.get_or_create(
-            username=username,
-            defaults={'first_name': user_info.get('primeiro_nome', ''), 'last_name': user_info.get('ultimo_nome', ''), 'email': user_info.get('email', '')}
-        )
-        if not created:
-            user.first_name = user_info.get('primeiro_nome', user.first_name)
-            user.last_name = user_info.get('ultimo_nome', user.last_name)
-            user.email = user_info.get('email', user.email)
-            user.save()
+        except SuapForbidden as e:
+            return Response({"detail": str(e)}, status=status.HTTP_403_FORBIDDEN)
 
-        SUAPTokenBackup.objects.update_or_create(
-            user=user,
-            defaults={'suap_token': suap_access_token, 'expires_at': timezone.now() + timedelta(hours=2), 'password_hash': make_password(password)}
-        )
-        
-        tipo_vinculo = user_info.get("tipo_vinculo", "padrão").lower()
-        role_map = {"aluno": "padrao", "servidor": "servidor", "coordenador": "coordenador", "administrador": "administrador"}
-        role = role_map.get(tipo_vinculo, "padrao")
+        except SuapNotFound as e:
+            return Response({"detail": str(e)}, status=status.HTTP_404_NOT_FOUND)
 
-        publish_event('user_events', {
-            'event_type': 'user_created' if created else 'user_updated',
-            'user_id': user.id,
-            'username': user.username,
-            'role': role
-        })
+        except SuapServerError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_502_BAD_GATEWAY)
 
-        # MUDANÇA CRÍTICA: Adiciona o 'role' e o 'iss' (issuer) ao token
-        refresh = RefreshToken.for_user(user)
-        refresh['role'] = role
-        refresh['iss'] = 'porta-facil-api' # Esta é a "marca" do nosso token
+        except SuapError as e:
+            # erro genérico do SUAP (timeout, erro de conexão etc.)
+            return Response({"detail": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
-        res = Response({'detail': 'Login via SUAP bem-sucedido.', 'user_info': UserSerializer(user).data}, status=status.HTTP_200_OK)
-        set_auth_cookies(res, str(refresh.access_token), str(refresh))
-        return res
+        except Exception as e:
+            # fallback final para evitar 500 sem mensagem clara
+            return Response({"detail": f"Erro inesperado: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
